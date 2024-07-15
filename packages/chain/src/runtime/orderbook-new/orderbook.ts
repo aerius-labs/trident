@@ -2,7 +2,6 @@ import { RBTree } from 'bintrees';
 import { CircularBuffer } from "./circular_buffer";
 
 const MAX_PRICE_HISTORY = 1000;
-const MAX_MATCHES_PER_ROUND = 5; // Adjust this value as needed
 
 export class Order {
     constructor(
@@ -17,6 +16,38 @@ export class Order {
 
     static createEmptyOrder(): Order {
         return new Order('', 0, 0, '', '', false, 0);
+    }
+}
+
+class OrderNode {
+    next: OrderNode | null = null;
+    constructor(public order: Order) {}
+}
+
+class OrderLinkedList {
+    head: OrderNode | null = null;
+    tail: OrderNode | null = null;
+
+    addOrder(order: Order): void {
+        const newNode = new OrderNode(order);
+        if (!this.head) {
+            this.head = this.tail = newNode;
+        } else {
+            this.tail!.next = newNode;
+            this.tail = newNode;
+        }
+    }
+
+    removeFirstOrder(): Order | null {
+        if (!this.head) return null;
+        const order = this.head.order;
+        this.head = this.head.next;
+        if (!this.head) this.tail = null;
+        return order;
+    }
+
+    isEmpty(): boolean {
+        return this.head === null;
     }
 }
 
@@ -56,7 +87,7 @@ export class OrderBook {
     constructor(baseToken: string, quoteToken: string) {
         this.buyOrders = new Map<number, PriceLevel>();
         this.sellOrders = new Map<number, PriceLevel>();
-        this.buyPrices = new RBTree<number>((a, b) => b - a);  // Descending order for buys
+        this.buyPrices = new RBTree<number>((a, b) => a - b);  // Descending order for buys
         this.sellPrices = new RBTree<number>((a, b) => a - b);  // Ascending order for sells
         this.baseToken = baseToken;
         this.quoteToken = quoteToken;
@@ -80,9 +111,9 @@ export class OrderBook {
         let priceLevel = orderMap.get(normalizedOrder.price);
         if (!priceLevel) {
             priceLevel = new PriceLevel();
-            orderMap.set(normalizedOrder.price, priceLevel);
-            priceTree.insert(normalizedOrder.price);
         }
+        orderMap.set(normalizedOrder.price, priceLevel);
+        priceTree.insert(normalizedOrder.price);
         priceLevel.addOrder(normalizedOrder);
     }
 
@@ -90,60 +121,128 @@ export class OrderBook {
         const matches: [Order, Order][] = [];
         let partialMatch: Order | null = null;
 
-        for (let i = 0; i < MAX_MATCHES_PER_ROUND; i++) {
-            if (this.buyPrices.size > 0 && this.sellPrices.size > 0) {
-                const bestBuyPrice = this.buyPrices.max();
-                const bestSellPrice = this.sellPrices.min();
+        while (this.buyPrices.size > 0 && this.sellPrices.size > 0) {
+            const bestBuyPrice = this.buyPrices.max();
+            const bestSellPrice = this.sellPrices.min();
 
-                if (bestBuyPrice !== null && bestSellPrice !== null && bestBuyPrice >= bestSellPrice) {
-                    const buyPriceLevel = this.buyOrders.get(bestBuyPrice)!;
-                    const sellPriceLevel = this.sellOrders.get(bestSellPrice)!;
+            if (bestBuyPrice === null || bestSellPrice === null || bestBuyPrice < bestSellPrice) {
+                break;
+            }
 
-                    const buy = buyPriceLevel.orders[0];
-                    const sell = sellPriceLevel.orders[0];
+            const buyPriceLevel = this.buyOrders.get(bestBuyPrice)!;
+            const sellPriceLevel = this.sellOrders.get(bestSellPrice)!;
 
-                    const matchedQuantity = Math.min(buy.quantity, sell.quantity);
+            const buy = buyPriceLevel.orders[0];
+            const sell = sellPriceLevel.orders[0];
 
-                    buy.quantity -= matchedQuantity;
-                    sell.quantity -= matchedQuantity;
+            const matchedQuantity = Math.min(buy.quantity, sell.quantity);
 
-                    matches.push([
-                        { ...buy, quantity: matchedQuantity },
-                        { ...sell, quantity: matchedQuantity }
-                    ]);
+            buy.quantity -= matchedQuantity;
+            sell.quantity -= matchedQuantity;
 
-                    this.lastTradePrice = bestBuyPrice;
-                    this.addToPriceHistory(bestBuyPrice);
+            matches.push([
+                { ...buy, quantity: matchedQuantity },
+                { ...sell, quantity: matchedQuantity }
+            ]);
 
-                    if (buy.quantity === 0) buyPriceLevel.removeOrder();
-                    if (sell.quantity === 0) sellPriceLevel.removeOrder();
+            this.lastTradePrice = bestBuyPrice;
+            this.addToPriceHistory(bestBuyPrice);
 
-                    if (buyPriceLevel.isEmpty()) {
-                        this.buyOrders.delete(bestBuyPrice);
-                        this.buyPrices.remove(bestBuyPrice);
-                    }
-                    if (sellPriceLevel.isEmpty()) {
-                        this.sellOrders.delete(bestSellPrice);
-                        this.sellPrices.remove(bestSellPrice);
-                    }
+            if (buy.quantity === 0) buyPriceLevel.removeOrder();
+            if (sell.quantity === 0) sellPriceLevel.removeOrder();
 
-                    if (buy.quantity > 0 || sell.quantity > 0) {
-                        partialMatch = buy.quantity > 0 ? buy : sell;
-                    }
-                } else {
-                    // No more matches possible, fill with empty orders
-                    matches.push([Order.createEmptyOrder(), Order.createEmptyOrder()]);
-                }
-            } else {
-                // Not enough orders to match, fill with empty orders
-                matches.push([Order.createEmptyOrder(), Order.createEmptyOrder()]);
+            if (buyPriceLevel.isEmpty()) {
+                this.buyOrders.delete(bestBuyPrice);
+                this.buyPrices.remove(bestBuyPrice);
+            }
+            if (sellPriceLevel.isEmpty()) {
+                this.sellOrders.delete(bestSellPrice);
+                this.sellPrices.remove(bestSellPrice);
+            }
+
+            if (buy.quantity > 0 || sell.quantity > 0) {
+                partialMatch = buy.quantity > 0 ? buy : sell;
             }
         }
 
         return { matches, partialMatch };
     }
 
-    // ... (keep other methods like cancelOrder, getAllOrders, getPriceHistory, etc.)
+    cancelOrder(id: string, price: number, isBuy: boolean): boolean {
+        const orderMap = isBuy ? this.buyOrders : this.sellOrders;
+        const priceTree = isBuy ? this.buyPrices : this.sellPrices;
+
+        const priceLevel = orderMap.get(price);
+        if (!priceLevel) return false;
+
+        const index = priceLevel.orders.findIndex(order => order.id === id);
+        if (index === -1) return false;
+
+        const [cancelledOrder] = priceLevel.orders.splice(index, 1);
+        priceLevel.totalQuantity -= cancelledOrder.quantity;
+
+        if (priceLevel.isEmpty()) {
+            orderMap.delete(price);
+            priceTree.remove(price);
+        }
+
+        return true;
+    }
+
+    getAllOrders(): { buyOrders: Order[]; sellOrders: Order[] } {
+        const buyOrders: Order[] = [];
+        const sellOrders: Order[] = [];
+
+        for (const priceLevel of this.buyOrders.values()) {
+            buyOrders.push(...priceLevel.orders);
+        }
+
+        for (const priceLevel of this.sellOrders.values()) {
+            sellOrders.push(...priceLevel.orders);
+        }
+
+        return { buyOrders, sellOrders };
+    }
+
+    getPriceHistory(): { timestamp: number; price: number }[] {
+        return this.priceHistory.getItems();
+    }
+
+    getCurrentPrice(): number | null {
+        return this.lastTradePrice;
+    }
+
+    getBestBidAsk(): { bestBid: number | null; bestAsk: number | null } {
+        const bestBid = this.buyPrices.size > 0 ? this.buyPrices.max() : null;
+        const bestAsk = this.sellPrices.size > 0 ? this.sellPrices.min() : null;
+        return { bestBid, bestAsk };
+    }
+
+    getOrderBookDepth(depth: number): { bids: [number, number][]; asks: [number, number][] } {
+        const bids: [number, number][] = [];
+        const asks: [number, number][] = [];
+
+        let buyIt = this.buyPrices.iterator(), sellIt = this.sellPrices.iterator();
+        let buyNext = buyIt.prev(), sellNext = sellIt.next();
+
+        for (let i = 0; i < depth; i++) {
+            if (buyNext !== null) {
+                const priceLevel = this.buyOrders.get(buyNext)!;
+                bids.push([buyNext, priceLevel.totalQuantity]);
+                buyNext = buyIt.prev();
+            }
+
+            if (sellNext !== null) {
+                const priceLevel = this.sellOrders.get(sellNext)!;
+                asks.push([sellNext, priceLevel.totalQuantity]);
+                sellNext = sellIt.next();
+            }
+
+            if (buyNext === null && sellNext === null) break;
+        }
+
+        return { bids, asks };
+    }
 
     private normalizeOrder(order: Order): Order {
         if (order.baseToken === this.baseToken && order.quoteToken === this.quoteToken && order.isBuy) {

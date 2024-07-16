@@ -1,11 +1,11 @@
-import { Field } from "o1js";
+import { Bool } from "o1js";
 
-export class OrderType extends Field {
-    public static buy() {
-        return OrderType.from(0);
+export class OrderType extends Bool {
+    static buy(): Bool {
+        return Bool(true);
     }
 
-    public static sell() {
-        return OrderType.from(1);
+    static sell(): Bool {
+        return Bool(false);
     }
 }

@@ -79,7 +79,7 @@ export class OrderBook {
     private sellOrders: Map<number, PriceLevel>;
     private buyPrices: RBTree<number>;
     private sellPrices: RBTree<number>;
-    private baseToken: string;
+    baseToken: string;
     private quoteToken: string;
     private lastTradePrice: number | null;
 

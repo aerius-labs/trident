@@ -1,7 +1,8 @@
 import { RBTree } from 'bintrees';
 import { CircularBuffer } from "./circular_buffer";
 
-const MAX_PRICE_HISTORY = 1000;
+export const MAX_PRICE_HISTORY = 1000;
+export const MAX_MATCHES = 5;
 
 export class Order {
     constructor(
@@ -87,7 +88,7 @@ export class OrderBook {
     constructor(baseToken: string, quoteToken: string) {
         this.buyOrders = new Map<number, PriceLevel>();
         this.sellOrders = new Map<number, PriceLevel>();
-        this.buyPrices = new RBTree<number>((a, b) => a - b);  // Descending order for buys
+        this.buyPrices = new RBTree<number>((a, b) => a - b);  // Ascending order for buys
         this.sellPrices = new RBTree<number>((a, b) => a - b);  // Ascending order for sells
         this.baseToken = baseToken;
         this.quoteToken = quoteToken;
@@ -121,7 +122,7 @@ export class OrderBook {
         const matches: [Order, Order][] = [];
         let partialMatch: Order | null = null;
 
-        while (this.buyPrices.size > 0 && this.sellPrices.size > 0) {
+        while (matches.length < MAX_MATCHES && this.buyPrices.size > 0 && this.sellPrices.size > 0) {
             const bestBuyPrice = this.buyPrices.max();
             const bestSellPrice = this.sellPrices.min();
 
@@ -163,6 +164,11 @@ export class OrderBook {
             if (buy.quantity > 0 || sell.quantity > 0) {
                 partialMatch = buy.quantity > 0 ? buy : sell;
             }
+        }
+
+        // Fill remaining slots with empty orders
+        while (matches.length < MAX_MATCHES) {
+            matches.push([Order.createEmptyOrder(), Order.createEmptyOrder()]);
         }
 
         return { matches, partialMatch };
